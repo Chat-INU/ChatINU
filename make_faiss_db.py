@@ -15,7 +15,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--urls_path', type=str, default='data/crawl4ai/main_homepage_urls', help="스크랩한 파일들이 저장된 폴더의 root 위치")
     parser.add_argument('--posts_path', type=str, default='data/posts', help="스크랩한 파일들이 저장된 폴더의 root 위치")
-    parser.add_argument('--emb_model', type=str, default='20241006_crawl4ai_gpt-4o-mini/model_epoch_22', help="임베딩 모델 경로")
+    parser.add_argument('--emb_model', type=str, default='emb_models/20241006_crawl4ai_gpt-4o-mini/model_epoch_22', help="임베딩 모델 경로")
     args = parser.parse_args()
 
 
