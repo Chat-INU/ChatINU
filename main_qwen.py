@@ -1,18 +1,19 @@
 import os
 os.environ["CUDA_VISIBLE_DEVICES"]= "1"
-import re
+import json
 import argparse
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.llms import VLLM
-from langchain.chains import LLMChain
+from langchain.chains import RetrievalQA, LLMChain
+from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
-from datetime import datetime
-from zoneinfo import ZoneInfo
-import CoT_prompts
+from langchain_teddynote.retrievers import OktBM25Retriever
 import time
-import requests
-from bs4 import BeautifulSoup
+import torch
+from transformers import pipeline
+import utils
+
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -20,177 +21,13 @@ warnings.filterwarnings("ignore", category=UserWarning)
 os.environ["OPENAI_API_KEY"] = ""
 
 
-
-import os
-
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-os.environ["LANGCHAIN_PROJECT"] = "qwen2.5_20240927"
-os.environ["LANGCHAIN_API_KEY"] = ""
-
-
-
-
-
-def get_today_menu():
-    
-    base_url = 'https://inucoop.com/main.php?mkey=2&w=4'
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-    }
-    
-    session = requests.Session()
-    session.headers.update(headers)
-    
-    response = session.get(base_url)
-    if response.status_code != 200:
-        print(f"페이지를 가져오지 못했습니다. 상태 코드: {response.status_code}")
-        return ""
-    
-    response.encoding = 'utf-8'  # 필요에 따라 조정
-    
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    form = soup.find('form', attrs={'name': 'menuForm'})
-    if not form:
-        print("menuForm을 찾을 수 없습니다.")
-        return ""
-    
-    action_url = form['action']
-    if not action_url.startswith('http'):
-        action_url = requests.compat.urljoin(base_url, action_url)
-    
-    dates = []
-    date_cells = soup.find_all('td', class_=['yo_mn', 'yo_mns2'])
-    for cell in date_cells:
-        onclick = cell.get('onclick', '')
-        if 'sdt.value' in onclick:
-            sdt_value = onclick.split("sdt.value='")[1].split("';")[0]
-            date_text = cell.get_text(strip=True)
-            dates.append({'sdt': sdt_value, 'date_text': date_text})
-    
-    today = datetime.now().strftime('%Y%m%d')
-
-    today_info = None
-    for date_info in dates:
-        if date_info['sdt'] == today:
-            today_info = date_info
-            break
-    
-    if not today_info:
-        print("오늘의 메뉴를 찾을 수 없습니다.")
-        return ""
-    
-    sdt_value = today_info['sdt']
-    date_text = today_info['date_text']
-    print(f"{date_text}의 메뉴를 처리 중입니다...")
-    
-    post_data = {
-        'jun': '0',  # 폼에서 'jun'은 '0'으로 유지
-        'sdt': sdt_value
-    }
-    
-    menu_response = session.post(action_url, data=post_data)
-    if menu_response.status_code != 200:
-        print(f"{date_text}의 메뉴를 가져오지 못했습니다. 상태 코드: {menu_response.status_code}")
-        return ""
-    
-    menu_response.encoding = 'utf-8'  # 필요에 따라 조정
-    
-    menu_soup = BeautifulSoup(menu_response.text, 'html.parser')
-    
-    menu_text = f"=== {date_text}의 메뉴 ===\n\n"
-    
-    # style="width:960px;"인 모든 테이블 찾기
-    tables = menu_soup.find_all('table', attrs={'style': 'width:960px;'})
-    
-    for table in tables:
-        canteen_name_row = table.find('tr')
-        canteen_name_cell = canteen_name_row.find('td', attrs={
-            'colspan': True, 
-            'style': 'font-size:14pt;font-weight:bold;'
-        })
-        if canteen_name_cell:
-            canteen_name = canteen_name_cell.get_text(strip=True)
-            menu_text += f"식당: {canteen_name}\n"
-        else:
-            continue  # 식당 이름이 없으면 스킵
-    
-        meal_type_row = canteen_name_row.find_next_sibling('tr')
-        meal_type_cells = meal_type_row.find_all('td', class_='td_mn')
-        meal_types = [cell.get_text(strip=True) for cell in meal_type_cells]
-
-        menu_row = meal_type_row.find_next_sibling('tr')
-        if not menu_row:
-            continue
-        menu_cells = menu_row.find_all('td', class_=['din_lists', 'td_list'])
-        menus = [cell.get_text(separator='\n', strip=True) for cell in menu_cells]
-
-        if len(menu_cells) == 1 and '오늘 등록된 메뉴가 없습니다' in menus[0]:
-            menu_text += f"  {menus[0]}\n"
-            continue
-    
-        for meal_type, menu in zip(meal_types, menus):
-            menu_text += f"\n--- {meal_type} ---\n"
-            menu_text += f"{menu}\n"
-        menu_text += "\n" + "="*10 + "\n\n"
-    
-    print(f"{date_text}의 메뉴를 가져왔습니다.")
-    return menu_text
-
-
-def is_menu_query(user_msg):
-    weather_patterns = [
-        r".*메뉴.*",
-        r".*학식.*",
-        r".*점심.*",
-        r".*저녁.*",
-        r".*메누.*",
-        r".*점메추.*",
-        r".*저메추.*",
-        r".*기식.*",
-        r".*교직원식당.*",
-        r".*생협식당.*",
-    ]
-    for pattern in weather_patterns:
-        if re.search(pattern, user_msg):
-            return True
-    return False
-
-
-def get_menu_instruct(query: str) -> str:
-    
-    kst = ZoneInfo('Asia/Seoul')
-    
-    now_in_kst = datetime.now(kst)
-
-    today = now_in_kst.strftime('%Y-%m-%d')
-    
-    menu_text = get_today_menu()
-    
-    return f'오늘({today})의 메뉴:{menu_text}Question: {query}\n핵심 메뉴만 간략하게 소개하세요. (학식은 학생 식당의 줄임말입니다. 2호관식당은 교직원 식당으로 불립니다(혹은 교식). 기식은 기숙사 식당입니다. 전부 소개하지 말고 학생이 질문한 식당의 메뉴만 안내하세요.)\n\n'
-
-
-def get_detailed_instruct(query: str) -> str:
-
-    kst = ZoneInfo('Asia/Seoul')
-    
-    now_in_kst = datetime.now(kst)
-
-    today = now_in_kst.strftime('%Y-%m-%d')
-    
-    return f'Today is {today}. 오늘 날짜는 {today}입니다. 현재 인천대학교는 2024년 2학기 입니다. \nQuestion: {query}' # Query와 관련된 최신 passages를 찾아줘.
-    
-
         
-def create_context_string(docs):
-    result = ""
-    for idx, doc in enumerate(docs, start=1):
-        result += f"Context{idx}: {doc.page_content} "
-    return result.strip()
-        
-def custom_chat_loop(llm_chain, retrieval):
+def custom_chat_loop(llm_chain, keyword_llm, semantic_retriever, bm25_retriever):
+    
+    word_file_path = 'word.jsonl'
+    word_definitions = utils.load_word_definitions(word_file_path)
+    
+    
     while True:
         print()
         user_msg = input('User: ')
@@ -200,16 +37,31 @@ def custom_chat_loop(llm_chain, retrieval):
   
         start_time = time.time()
         
-        if is_menu_query(user_msg):
-            docs = retrieval.invoke(user_msg)
-            context = create_context_string(docs)
-            question = get_menu_instruct(user_msg)
+        
+        user_msg = utils.add_definitions_to_message(user_msg, word_definitions)
+        
+        
+        messages = [
+            {"role": "user", "content": f"{user_msg}\n\n위 질문의 키워드는? 딱 키워드만 생성하세요\n\n키워드: "},
+        ]
+
+        outputs = keyword_llm(messages, max_new_tokens=256)
+        keyword = outputs[0]["generated_text"][-1]["content"].strip()
+        print("Keyword: ", keyword)
+        
+        
+        
+        if utils.is_menu_query(user_msg):
+            docs = semantic_retriever.invoke(user_msg)
+            context = utils.create_context_string(docs)
+            question = utils.get_menu_instruct(user_msg)
             llm_answer = llm_chain.run(context=context, question=question)
             print(question)
         else:
-            docs = retrieval.invoke(user_msg)
-            context = create_context_string(docs)
-            question = get_detailed_instruct(user_msg)
+            docs = semantic_retriever.invoke(user_msg)
+            keyword_docs = okt_retrieval.invoke(keyword)
+            context = utils.create_context_string(docs+keyword_docs)
+            question = utils.get_detailed_instruct(user_msg)
             llm_answer = llm_chain.run(context=context, question=question)
             print(question)
 
@@ -221,13 +73,9 @@ def custom_chat_loop(llm_chain, retrieval):
         print()
 
         print('검색된 문서는 다음과 같습니다:')
-        print(docs)
-        print(f'총 {len(docs)} 개의 문서가 검색됨.')
+        print(docs+keyword_docs)
+        print(f'총 {len(docs+keyword_docs)} 개의 문서가 검색됨.')
 
-
-
-def escape_braces(text):
-    return text.replace('{', '{{').replace('}', '}}')
 
 
 
@@ -253,7 +101,7 @@ Context의 내용을 그대로 답변하지 말고 150글자 이내로 요약해
 
 확실하지 않거나 애매하거나 너무 어려거나 복잡한 질문인 경우에는 직접 링크에 접속하여 자세한 내용을 확인하도록 유도하세요.
 
-만약 인천대학교와 관련 없는 일반적인 질문이나 평상 시의 대화라면 Context를 무시하고 원래대로 대답하고 context의 링크를 제공하지 마세요.<|im_end|>
+만약 인천대학교와 관련 없는 일반적인 질문이나 평상 시의 대화라면 Context를 무시하고 원래대로 대답하고 context의 링크를 제공하지 마세요. <|im_end|>
 
 <|im_start|>user
 
@@ -262,7 +110,7 @@ Context: {context}
 
 {question}
 
-Answer:  <|im_end|><|im_start|>assistant
+Answer: <|im_end|><|im_start|>assistant
 
 """
 
@@ -283,7 +131,7 @@ if __name__ == '__main__':
     print(f"device: {device}")
 
     
-    auth_token = "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"
+    auth_token = ""
 
     
     llm_q = VLLM(
@@ -308,20 +156,36 @@ if __name__ == '__main__':
     # 저장했던 FAISS 로드
     faiss_path = os.path.join("faiss", timestamp)
     db = FAISS.load_local(faiss_path, ko_embed, allow_dangerous_deserialization=True)
-    faiss_retriever = db.as_retriever(search_kwargs={"k": 5})
-  
-
+    faiss_retriever = db.as_retriever(search_kwargs={"k": 4})
     
-
+    
+    chunk_path =  os.path.join("chunks", timestamp, 'chunk_list.json')
+    chunk_metadata_path = os.path.join("chunks", timestamp, 'metadata_list.json')
+    
+    with open(chunk_path, 'r', encoding='utf-8') as file:
+        docs_chunks = json.load(file)
+    
+    with open(chunk_metadata_path, 'r', encoding='utf-8') as file:
+        chunks_metadatas = json.load(file)
+    
+    okt_retrieval = OktBM25Retriever.from_texts(docs_chunks, metadatas=chunks_metadatas)
+    okt_retrieval.k = 4
+    
     
     CUSTOM_PROMPT = PromptTemplate(
         template=custom_prompt_template, input_variables=["context", "question"]
     )
     
 
-
     llm_chain = LLMChain(llm=llm_q, prompt=CUSTOM_PROMPT)
+    
+    
+    keyword_pipe = pipeline(
+        "text-generation",
+        model="google/gemma-2-2b-it",
+        model_kwargs={"torch_dtype": torch.bfloat16},
+        device="cuda",  # replace with "mps" to run on a Mac device
+    )
 
     
-    custom_chat_loop(llm_chain, faiss_retriever)
-  
+    custom_chat_loop(llm_chain, keyword_pipe, faiss_retriever, okt_retrieval)
