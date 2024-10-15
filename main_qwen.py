@@ -49,18 +49,17 @@ def custom_chat_loop(llm_chain, keyword_llm, semantic_retriever, bm25_retriever)
         keyword = outputs[0]["generated_text"][-1]["content"].strip()
         print("Keyword: ", keyword)
         
-        
+        semantic_docs = semantic_retriever.invoke(user_msg)
+        keyword_docs = bm25_retriever.invoke(keyword)
+        total_docs = semantic_docs + keyword_docs
         
         if utils.is_menu_query(user_msg):
-            docs = semantic_retriever.invoke(user_msg)
-            context = utils.create_context_string(docs)
+            context = utils.create_context_string(total_docs)
             question = utils.get_menu_instruct(user_msg)
             llm_answer = llm_chain.run(context=context, question=question)
             print(question)
         else:
-            docs = semantic_retriever.invoke(user_msg)
-            keyword_docs = okt_retrieval.invoke(keyword)
-            context = utils.create_context_string(docs+keyword_docs)
+            context = utils.create_context_string(total_docs)
             question = utils.get_detailed_instruct(user_msg)
             llm_answer = llm_chain.run(context=context, question=question)
             print(question)
@@ -73,8 +72,8 @@ def custom_chat_loop(llm_chain, keyword_llm, semantic_retriever, bm25_retriever)
         print()
 
         print('검색된 문서는 다음과 같습니다:')
-        print(docs+keyword_docs)
-        print(f'총 {len(docs+keyword_docs)} 개의 문서가 검색됨.')
+        print(total_docs)
+        print(f'총 {len(total_docs)} 개의 문서가 검색됨.')
 
 
 
