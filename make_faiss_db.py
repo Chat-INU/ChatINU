@@ -1,6 +1,5 @@
 # 스크랩한 문서를 전처리하고 split하여 각각의 임베딩을 구하고 FAISS로 index 만들어 로컬에 저장
 import os
-os.environ["CUDA_VISIBLE_DEVICES"]= "3"
 import re
 import json
 import datetime
@@ -8,17 +7,17 @@ import argparse
 from langchain.text_splitter import RecursiveCharacterTextSplitter, TextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.embeddings import HuggingFaceInstructEmbeddings
+from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--urls_path', type=str, default='data/crawl4ai/main_homepage_urls', help="스크랩한 파일들이 저장된 폴더의 root 위치")
     parser.add_argument('--posts_path', type=str, default='data/posts', help="스크랩한 파일들이 저장된 폴더의 root 위치")
-    parser.add_argument('--emb_model', type=str, default='emb_models/20241006_crawl4ai_gpt-4o-mini/model_epoch_22', help="임베딩 모델 경로")
+    parser.add_argument('--emb_model', type=str, default='emb_models/20241017_crawl4ai_gpt-4o-mini/model_epoch_23', help="임베딩 모델 경로")
     args = parser.parse_args()
 
-
+    
     urls_root_path = args.urls_path
     posts_root_path = args.posts_path
 
@@ -158,7 +157,7 @@ if __name__ == '__main__':
                     'trust_remote_code': True}
     encode_kwargs = {'normalize_embeddings': True}
 
-    ko_embed = HuggingFaceInstructEmbeddings(
+    ko_embed = HuggingFaceBgeEmbeddings(
         model_name=model_name,
         model_kwargs=model_kwargs,
         encode_kwargs=encode_kwargs,
@@ -192,6 +191,7 @@ if __name__ == '__main__':
         os.makedirs(chunk_path)
         print(f"Directory created: {chunk_path}")
        
+       
 
     print(f'{chunk_path}에 분할된 chunk들과 메타데이터를 저장합니다..')
 
@@ -200,4 +200,4 @@ if __name__ == '__main__':
     
     with open(os.path.join(chunk_path, 'metadata_list.json'), 'w', encoding='utf-8') as file:
         json.dump(total_metadata, file, ensure_ascii=False, indent=4)
-      
+        
